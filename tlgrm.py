@@ -1,3 +1,4 @@
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 import qrcode
@@ -6,12 +7,11 @@ import crcmod
 from unidecode import unidecode
 from datetime import datetime
 
-TOKEN = "8227369400:AAE73Hb-AEZC-UZxMhJajv7xaQScwCK9U1s"
-
-# Sua chave PIX (e-mail, CPF, CNPJ ou aleatória)
-CHAVE_PIX = "e96bc856-affa-4c0c-ab59-5dfcc732ef34"
-NOME_RECEBEDOR = "GUSTAVO E R R OLIVEIRA"
-CIDADE_RECEBEDOR = "BALNEARIO CAMBORIU"
+# --- Configurações por variáveis de ambiente ---
+TOKEN = os.getenv("TOKEN", "SEU_TOKEN_LOCAL")
+CHAVE_PIX = os.getenv("CHAVE_PIX", "sua-chave-pix-aqui")
+NOME_RECEBEDOR = os.getenv("NOME_RECEBEDOR", "Seu Nome Aqui")
+CIDADE_RECEBEDOR = os.getenv("CIDADE_RECEBEDOR", "Sua Cidade Aqui")
 
 # Limites PIX
 MAX_LEN_NOME = 25
@@ -34,12 +34,12 @@ def gerar_pix(valor: float, descricao: str):
     payload = (
         "000201"
         "26" + f"{len('0014BR.GOV.BCB.PIX01'+str(len(CHAVE_PIX)).zfill(2)+CHAVE_PIX):02}" +
-        "0014BR.GOV.BCB.PIX" +
+        "0014BR.GOV.BCB.PIX"
         "01" + f"{len(CHAVE_PIX):02}" + CHAVE_PIX +
         "52040000"
         "5303986"
         "54" + f"{len(valor_str):02}" + valor_str +
-        "5802BR" +
+        "5802BR"
         "59" + f"{len(NOME_RECEBEDOR):02}" + NOME_RECEBEDOR +
         "60" + f"{len(CIDADE_RECEBEDOR):02}" + CIDADE_RECEBEDOR +
         "62" + f"{len('0503***'):02}" + "0503***" +
@@ -54,7 +54,7 @@ def gerar_pix(valor: float, descricao: str):
     bio.seek(0)
     return payload, bio
 
-# Funções auxiliares que usam message diretamente
+# Funções auxiliares
 async def previas_msg(message):
     fotos = [
         "https://vago-sc.com/tlgrm/foto1.jpg",
@@ -64,7 +64,6 @@ async def previas_msg(message):
     for f in fotos:
         await message.reply_photo(f)
     
-    # Depois de enviar todas as fotos, adicionar botão VIP
     keyboard = [[InlineKeyboardButton("💎 Assinar VIP", callback_data="menu_vip")]]
     await message.reply_text(
         "Quer desbloquear tudo? Assine o VIP agora:",
@@ -80,7 +79,7 @@ async def vip_msg(message):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# /start - menu inicial
+# /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📸 Ver Prévias", callback_data="menu_previas")],
@@ -99,26 +98,20 @@ async def previas(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await vip_msg(update.message)
 
-# Botão pagar e menu
+# Botão pagar e menus
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     if query.data == "pagar_vip":
         payload, qrcode_img = gerar_pix(7.99, "VIP Telegram")
-        
-        # Envia QRCode
         await query.message.reply_photo(qrcode_img, caption="📸 Escaneie para pagar\nOu use o código abaixo:")
-
-        # Envia PIX copia e cola
         await query.message.reply_text(f"```\n{payload}\n```", parse_mode="Markdown")
 
-        # LOG no terminal
         user = query.from_user
         username = user.username or user.first_name
-        user_id = user.id
         now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        print(f"[{now}] PIX gerado por {username} (ID: {user_id})")
+        print(f"[{now}] PIX gerado por {username} (ID: {user.id})")
         print(f"Payload: {payload}")
         print("------------------------------------")
 
@@ -134,4 +127,30 @@ application.add_handler(CommandHandler("previas", previas))
 application.add_handler(CommandHandler("vip", vip))
 application.add_handler(CallbackQueryHandler(button_handler))
 
-application.run_polling()
+if __name__ == "__main__":
+    if os.getenv("RENDER"):  # Detecta Render para usar webhook
+        import asyncio
+        from aiohttp import web
+
+        async def handle(request):
+            data = await request.json()
+            await application.update_queue.put(Update.de_json(data, application.bot))
+            return web.Response()
+
+        async def main():
+            app = web.Application()
+            app.router.add_post(f"/{TOKEN}", handle)
+
+            await application.bot.set_webhook(f"{os.getenv('RENDER_EXTERNAL_URL')}/{TOKEN}")
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", "10000")))
+            await site.start()
+
+            print("Bot rodando com webhook no Render...")
+            await asyncio.Event().wait()
+
+        asyncio.run(main())
+    else:
+        print("Bot rodando localmente com polling...")
+        application.run_polling()
